@@ -32,15 +32,29 @@ PluginComponent {
 
         stdout: SplitParser {
             onRead: data => {
-                root.prayerInfo = data.trim();
+                try {
+                    var data = JSON.parse(data)
+                    root.fajr = data.Fajr
+                    root.dhuhr = data.Dhuhr
+                    root.asr = data.Asr
+                    root.maghrib = data.Maghrib
+                    root.isha = data.Isha
+                    root.prayerInfo = data.prayerInfo
+
+                    root.dateGreg = data.DateGreg
+                    root.dateHijr = data.DateHijr
+
+                } catch (e) {
+                    root.prayerInfo = e.message
+                    prayerProcess.running = true;
+                    console.error("prayer JSON error:", e)
+                }
             }
         }
-        
-        onRunningChanged: {
-            if (!running) {
-                console.log("Prayer times updated: ", root.prayerInfo);
-            }
-        }
+    }
+
+    Component.onCompleted: {
+        prayerProcess.running = true;
     }
 
     Timer {
@@ -50,33 +64,6 @@ PluginComponent {
         triggeredOnStart: true
         onTriggered: {
             prayerProcess.running = true;
-        }
-    }
-
-    FileView {
-        id: jsonFile
-        path: Qt.resolvedUrl("prayer_times.json").toString().replace("file://", "")
-        // Forces the file to be loaded by the time we call JSON.parse().
-        // see blockLoading's property documentation for details.
-        blockLoading: true
-        onDataChanged: {
-            try {
-                var data = JSON.parse(jsonFile.text())
-                var t = data.data.timings
-                root.fajr = t.Fajr
-                root.dhuhr = t.Dhuhr
-                root.asr = t.Asr
-                root.maghrib = t.Maghrib
-                root.isha = t.Isha
-
-                var d = data.data.date
-                root.dateGreg = d.readable
-                root.dateHijr = `${d.hijri.day} ${d.hijri.month.en} ${d.hijri.year}`
-            } catch (e) {
-                root.fajr = "waduh"
-                prayerProcess.running = true;
-                console.log("JSON error:", e)
-            }
         }
     }
 

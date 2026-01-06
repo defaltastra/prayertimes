@@ -1,14 +1,15 @@
 #!/bin/bash
 
+TO_DATE=$(date +%d-%m-%Y -d "$DATE + 30 day")
 DATE=$(date +%d-%m-%Y)
 LAT=$1 #-6.2088
 LON=$2 #106.8456
-METHOD=2
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JSON_FILE="prayer_times.json"
+JSON_FILE="prayer_times_monthly.json"
+STORED_INDEX=null
 
 # Function to fetch data
-URL="https://api.aladhan.com/v1/timings/${DATE}?latitude=${LAT}&longitude=${LON}&method=${METHOD}"
+URL="https://api.aladhan.com/v1/calendar/from/${DATE}/to/${TO_DATE}?latitude=${LAT}&longitude=${LON}"
 fetch_data() {
     notify-send "requesting data" "$URL"
     curl -s "$URL" | jq '.' > "$SCRIPT_DIR/$JSON_FILE"
@@ -16,9 +17,10 @@ fetch_data() {
 
 # Check if JSON exists and is for today
 if [ -f "$SCRIPT_DIR/$JSON_FILE" ]; then
-    STORED_DATE=$(jq -r '.data.date.readable' "$SCRIPT_DIR/$JSON_FILE" 2>/dev/null)
-    # notify-send "sip ada json file" "$URL"
-    if [ "$STORED_DATE" != "$(date +"%d %b %Y")" ]; then
+    STORED_INDEX=$(
+        jq --arg date "$DATE" '.data | map(.date.gregorian.date == $date) | index(true)' "$SCRIPT_DIR/$JSON_FILE"
+    )
+    if [ "$STORED_INDEX" == null ]; then
         fetch_data
     fi
 else
@@ -27,18 +29,25 @@ else
 fi
 
 # Read timings from JSON
-TIMINGS=$(jq -r '.data.timings' "$SCRIPT_DIR/$JSON_FILE")
-if [ -z "$TIMINGS" ] || [ "$TIMINGS" == "null" ]; then
+TODAYDATA=$(jq --argjson i "$STORED_INDEX" '.data[$i]' "$SCRIPT_DIR/$JSON_FILE")
+if [ -z "$TODAYDATA" ] || [ "$TODAYDATA" == "null" ]; then
     echo "Error fetching prayer times"
     exit 1
 fi
 
+TIMINGS=$(echo "$TODAYDATA" | jq -r '.timings')
 FAJR=$(echo "$TIMINGS" | jq -r '.Fajr')
 DHUHR=$(echo "$TIMINGS" | jq -r '.Dhuhr')
 ASR=$(echo "$TIMINGS" | jq -r '.Asr')
 MAGHRIB=$(echo "$TIMINGS" | jq -r '.Maghrib')
 ISHA=$(echo "$TIMINGS" | jq -r '.Isha')
 NOW=$(date +%H:%M)
+
+GREG_DATE=$(echo "$TODAYDATA" | jq -r '.date.readable')
+HIJRI_DATE=$(echo "$TODAYDATA" | jq -r '.date.hijri | "\(.day) \(.month.en) \(.year)"')
+
+# echo $GREG_DATE
+# exit 1
 
 # Fungsi untuk mengubah HH:MM ke total menit
 to_minutes() {
@@ -73,9 +82,19 @@ fi
 
 # Logika Tampilan: Jika selisih masih dalam 30 menit
 if [ $SELISIH -le 30 ]; then
-    RESULT="Current: $CURR_NAME $CURR_TIME - "
+    RESULT="Current: $CURR_NAME ${CURR_TIME:0:5} - "
 fi
 
-RESULT+="Next: $NEXT_NAME $NEXT_TIME"
+RESULT+="Next: $NEXT_NAME ${NEXT_TIME:0:5}"
 
-echo "$RESULT"
+TIMINGS=$(echo "$TIMINGS" | jq \
+  --arg prayerInfo "$RESULT" \
+  --arg hijr "$HIJRI_DATE" \
+  --arg greg "$GREG_DATE" \
+  '. + {prayerInfo: $prayerInfo, DateHijr: $hijr, DateGreg: $greg}')
+  
+TIMINGSS=$(echo "$TIMINGS" | jq -c .)
+echo "$TIMINGSS"
+
+# try to calling fetch data when the json hasn't updated for 10 days event the json still has the valid date
+if [ $STORED_INDEX gt 10 ]; then fetch_data
