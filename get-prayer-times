@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 TO_DATE=$(date +%d-%m-%Y -d "$DATE + 30 day")
 DATE=$(date +%d-%m-%Y)
@@ -10,26 +10,29 @@ STORED_INDEX=null
 
 # Function to fetch data
 URL="https://api.aladhan.com/v1/calendar/from/${DATE}/to/${TO_DATE}?latitude=${LAT}&longitude=${LON}"
+JSON_PATH="$SCRIPT_DIR/$JSON_FILE"
+
 fetch_data() {
-    notify-send "requesting data" "$URL"
-    curl -s "$URL" | jq '.' > "$SCRIPT_DIR/$JSON_FILE"
+    notify-send "Requesting data" "$URL"
+    curl -s "$URL" | jq '.' > "$JSON_PATH"
+    notify-send "Saved json" "from ${DATE} to ${TO_DATE}"
 }
 
-# Check if JSON exists and is for today
-if [ -f "$SCRIPT_DIR/$JSON_FILE" ]; then
-    STORED_INDEX=$(
-        jq --arg date "$DATE" '.data | map(.date.gregorian.date == $date) | index(true)' "$SCRIPT_DIR/$JSON_FILE"
-    )
-    if [ "$STORED_INDEX" == null ]; then
-        fetch_data
-    fi
-else
-    notify-send "waduh tidak ada json file"
+get_stored_index() {
+    jq --arg date "$DATE" \
+       '.data | map(.date.gregorian.date == $date) | index(true)' \
+       "$JSON_PATH"
+}
+
+# Fetch if file missing OR date not found
+if [ ! -f "$JSON_PATH" ] || [ "$(get_stored_index)" = "null" ]; then
     fetch_data
 fi
 
+STORED_INDEX="$(get_stored_index)"
+
 # Read timings from JSON
-TODAYDATA=$(jq --argjson i "$STORED_INDEX" '.data[$i]' "$SCRIPT_DIR/$JSON_FILE")
+TODAYDATA=$(jq --argjson i "$STORED_INDEX" '.data[$i]' "$JSON_PATH")
 if [ -z "$TODAYDATA" ] || [ "$TODAYDATA" == "null" ]; then
     echo "Error fetching prayer times"
     exit 1
@@ -97,4 +100,6 @@ TIMINGSS=$(echo "$TIMINGS" | jq -c .)
 echo "$TIMINGSS"
 
 # try to calling fetch data when the json hasn't updated for 10 days event the json still has the valid date
-if [ $STORED_INDEX gt 10 ]; then fetch_data
+if [[ "$STORED_INDEX" =~ ^[0-9]+$ ]] && [ "$STORED_INDEX" -gt 10 ]; then
+    fetch_data
+fi
