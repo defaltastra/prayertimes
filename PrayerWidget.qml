@@ -23,6 +23,7 @@ PluginComponent {
     property string lat: "-6.2088" // default Jakarta
     property string lon: "106.8456" // default Jakarta
     property string method: ""     // Calculation method (empty = API auto-detects by location)
+    property string school: "0"    // Asr calculation school: 0 = Shafi (default), 1 = Hanafi
 
     // In-memory cache:
     // Stores the API response for today so we only hit the network once per day.
@@ -30,11 +31,12 @@ PluginComponent {
     property var cachedTimings: null     // The `data` object from the Aladhan /v1/timings response
     property string cachedDate: ""       // The date (dd-MM-yyyy) the cache was fetched for
     property string cachedMethod: ""     // The method the cache was fetched with (invalidate on change)
+    property string cachedSchool: ""     // The school the cache was fetched with (invalidate on change)
     property bool fetching: false        // Guard flag — prevents overlapping concurrent HTTP requests
     property int retryCount: 0           // Tracks consecutive 429 failures for exponential backoff
 
     // Settings handler:
-    // Called whenever plugin settings change (refresh interval, lat, lon, method).
+    // Called whenever plugin settings change (refresh interval, lat, lon, method, school).
     // Can fire multiple times rapidly on startup as each setting loads,
     // so we funnel through a debounce timer instead of fetching directly.
     onPluginDataChanged: {
@@ -42,6 +44,7 @@ PluginComponent {
         root.lat = root.pluginData.lat || "-6.2088"
         root.lon = root.pluginData.lon || "106.8456"
         root.method = root.pluginData.method || ""
+        root.school = root.pluginData.school || "0"
         root.pluginDataLoaded = true
         debounceTimer.restart()  // restart (not start) to collapse multiple rapid signals
     }
@@ -86,14 +89,15 @@ PluginComponent {
     // Cache-or-fetch decision:
     // Central routing function called by both the debounce and refresh timers.
     // If we already have today's data cached it just reprocess it (free, no network).
-    // If the date changed, method changed, or cache is empty then it fetches fresh data from the API.
+    // If the date, method, or school changed, or cache is empty then it fetches fresh data from the API.
     function fetchOrProcess() {
         var today = Qt.formatDate(new Date(), "dd-MM-yyyy")
-        if (root.cachedDate === today && root.cachedMethod === root.method && root.cachedTimings) {
+        if (root.cachedDate === today && root.cachedMethod === root.method
+                && root.cachedSchool === root.school && root.cachedTimings) {
             // Cache hit — reprocess to update current/next prayer based on new time-of-day
             processPrayerData(root.cachedTimings)
         } else {
-            // Cache miss — date or method changed, or first run; need fresh data from API
+            // Cache miss — date, method, or school changed, or first run; need fresh data from API
             fetchPrayerTimes()
         }
     }
@@ -109,7 +113,9 @@ PluginComponent {
         // Call Aladhan API with no date param — it returns today's times automatically.
         // This is simpler and avoids date formatting issues vs the old /calendar/from/to endpoint.
         // Append &method=X only if a specific calculation method is selected in settings.
+        // Always append &school= since it defaults to 0 (Shafi).
         var url = "https://api.aladhan.com/v1/timings?latitude=" + root.lat + "&longitude=" + root.lon
+                + "&school=" + root.school
         if (root.method !== "") {
             url += "&method=" + root.method
         }
@@ -124,10 +130,11 @@ PluginComponent {
                     try {
                         var json = JSON.parse(xhr.responseText)
                         if (json.code === 200 && json.data) {
-                            // Cache the response, stamp with today's date and current method
+                            // Cache the response, stamp with today's date, method, and school
                             root.cachedTimings = json.data
                             root.cachedDate = Qt.formatDate(new Date(), "dd-MM-yyyy")
                             root.cachedMethod = root.method
+                            root.cachedSchool = root.school
                             processPrayerData(json.data)
                         } else {
                             root.prayerInfo = "API error: " + (json.status || "Unknown")

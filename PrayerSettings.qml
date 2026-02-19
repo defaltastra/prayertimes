@@ -87,4 +87,15 @@ PluginSettings {
             { label: "Ministry of Awqaf, Jordan", value: "23" }
         ]
     }
+
+    SelectionSetting {
+        settingKey: "school"
+        label: "Asr Calculation School"
+        description: "Juristic school used to calculate the Asr prayer time."
+        defaultValue: "0"
+        options: [
+            { label: "Shafi (Default)", value: "0" },
+            { label: "Hanafi", value: "1" }
+        ]
+    }
 }
