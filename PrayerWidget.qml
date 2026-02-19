@@ -53,8 +53,8 @@ PluginComponent {
                     root.dateHijr = data.DateHijr
 
                 } catch (e) {
+                    ToastService.showError("JSON error:", e.message);
                     root.prayerInfo = e.message
-                    prayerProcess.running = true;
                     console.error("prayer JSON error:", e)
                 }
             }

@@ -14,9 +14,11 @@ URL="https://api.aladhan.com/v1/calendar/from/${DATE}/to/${TO_DATE}?latitude=${L
 JSON_PATH="$SCRIPT_DIR/$JSON_FILE"
 
 fetch_data() {
-    notify-send "Requesting data" "$URL"
+    # notify-send "Requesting data" "$URL"
+    dms ipc toast infoWith 'Requesting data' "$URL" '' ''
     curl -s "$URL" | jq '.' > "$JSON_PATH"
-    notify-send "Saved json" "from ${DATE} to ${TO_DATE}"
+    dms ipc toast infoWith 'Saved json' "from ${DATE} to ${TO_DATE}" '' ''
+    # notify-send "Saved json" "from ${DATE} to ${TO_DATE}"
 }
 
 get_stored_index() {
@@ -85,8 +87,12 @@ if [ $SELISIH -lt 0 ]; then
 fi
 
 # Logika Tampilan: Jika selisih masih dalam 30 menit
-if [ $SELISIH -le 30 ]; then
-    RESULT="Current: $CURR_NAME ${CURR_TIME:0:5} - "
+if (( SELISIH <= 30 )); then
+    ALERT="$CURR_NAME ${CURR_TIME:0:5}"
+    RESULT="Current: $ALERT - "
+    if (( SELISIH - 1 <= refresh / 60000 )); then 
+        dms ipc toast info "Prayer time - $ALERT"
+    fi
 fi
 
 RESULT+="Next: $NEXT_NAME ${NEXT_TIME:0:5}"
