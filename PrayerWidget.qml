@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import Quickshell
-import Quickshell.Io
 import qs.Common
 import qs.Services
 import qs.Widgets
@@ -23,54 +22,247 @@ PluginComponent {
     property int refreshInterval: 5 * 60000 // default in minutes
     property string lat: "-6.2088" // default Jakarta
     property string lon: "106.8456" // default Jakarta
-    property string scriptPath: Qt.resolvedUrl("get-prayer-times").toString().replace("file://", "")
 
+    // In-memory cache:
+    // Stores the API response for today so we only hit the network once per day.
+    // On each refresh tick we just re-run processPrayerData() against this cache.
+    property var cachedTimings: null     // The `data` object from the Aladhan /v1/timings response
+    property string cachedDate: ""       // The date (dd-MM-yyyy) the cache was fetched for
+    property bool fetching: false        // Guard flag — prevents overlapping concurrent HTTP requests
+    property int retryCount: 0           // Tracks consecutive 429 failures for exponential backoff
+
+    // Settings handler:
+    // Called whenever plugin settings change (refresh interval, lat, lon).
+    // Can fire multiple times rapidly on startup as each setting loads,
+    // so we funnel through a debounce timer instead of fetching directly.
     onPluginDataChanged: {
         root.refreshInterval = (Number(root.pluginData.refreshInterval) || 5) * 60000
         root.lat = root.pluginData.lat || "-6.2088"
         root.lon = root.pluginData.lon || "106.8456"
         root.pluginDataLoaded = true
-        // Run process immediately when pluginData is loaded
-        prayerProcess.running = true;
+        debounceTimer.restart()  // restart (not start) to collapse multiple rapid signals
     }
 
-    Process {
-        id: prayerProcess
-        command: ["bash", root.scriptPath, root.lat, root.lon, root.refreshInterval]
-        running: false
-
-        stdout: SplitParser {
-            onRead: data => {
-                try {
-                    var data = JSON.parse(data)
-                    root.fajr = data.Fajr
-                    root.dhuhr = data.Dhuhr
-                    root.asr = data.Asr
-                    root.maghrib = data.Maghrib
-                    root.isha = data.Isha
-                    root.prayerInfo = data.prayerInfo
-
-                    root.dateGreg = data.DateGreg
-                    root.dateHijr = data.DateHijr
-                    root.currName = data.currName || "Fajr"
-
-                } catch (e) {
-                    ToastService.showError("JSON error:", e.message);
-                    root.prayerInfo = e.message
-                    console.error("prayer JSON error:", e)
-                }
-            }
-        }
+    // Debounce timer:
+    // Waits 500ms after the last onPluginDataChanged signal before triggering a fetch.
+    // This prevents hammering the API when multiple settings load in quick succession
+    // (e.g. lat, lon, and refreshInterval all arriving within milliseconds on startup).
+    Timer {
+        id: debounceTimer
+        interval: 500
+        repeat: false
+        onTriggered: fetchOrProcess()
     }
 
+    // Periodic refresh timer:
+    // Fires every `refreshInterval` (default 5 min) to re-evaluate which prayer is
+    // current/next. This does NOT call the API each time — it reprocesses the cached
+    // data. The API is only called if the date has changed (i.e. past midnight).
     Timer {
         interval: root.refreshInterval
         running: root.pluginDataLoaded
         repeat: true
         triggeredOnStart: false
+        onTriggered: fetchOrProcess()
+    }
+
+    // Retry timer (rate-limit backoff):
+    // Only used when the API returns HTTP 429 (Too Many Requests).
+    // Waits an exponentially increasing delay (30s → 60s → 120s → … up to 10min)
+    // before retrying, to be respectful to the API and avoid a ban.
+    Timer {
+        id: retryTimer
+        interval: 30000
+        repeat: false
         onTriggered: {
-            prayerProcess.running = true;
+            root.fetching = false   // release the guard so fetchPrayerTimes() can run
+            fetchPrayerTimes()
         }
+    }
+
+    // Cache-or-fetch decision:
+    // Central routing function called by both the debounce and refresh timers.
+    // If we already have today's data cached it just reprocess it (free, no network).
+    // If the date changed or cache is empty then it fetches fresh data from the API.
+    function fetchOrProcess() {
+        var today = Qt.formatDate(new Date(), "dd-MM-yyyy")
+        if (root.cachedDate === today && root.cachedTimings) {
+            // Cache hit — reprocess to update current/next prayer based on new time-of-day
+            processPrayerData(root.cachedTimings)
+        } else {
+            // Cache miss — date changed or first run, need fresh data from API
+            fetchPrayerTimes()
+        }
+    }
+
+    //  Pure JS API fetch — replaces the old bash script + Process/SplitParser
+    //  Uses XMLHttpRequest (built into QML) instead of curl + jq.
+
+    function fetchPrayerTimes() {
+        // Prevent overlapping requests (e.g. timer fires while a request is in-flight)
+        if (root.fetching) return
+        root.fetching = true
+
+        // Call Aladhan API with no date param — it returns today's times automatically.
+        // This is simpler and avoids date formatting issues vs the old /calendar/from/to endpoint.
+        var url = "https://api.aladhan.com/v1/timings?latitude=" + root.lat + "&longitude=" + root.lon
+        var xhr = new XMLHttpRequest()
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === XMLHttpRequest.DONE) {
+                root.fetching = false
+
+                if (xhr.status === 200) {
+                    // Success — reset retry counter and parse the response
+                    root.retryCount = 0
+                    try {
+                        var json = JSON.parse(xhr.responseText)
+                        if (json.code === 200 && json.data) {
+                            // Cache the response and stamp it with today's date
+                            root.cachedTimings = json.data
+                            root.cachedDate = Qt.formatDate(new Date(), "dd-MM-yyyy")
+                            processPrayerData(json.data)
+                        } else {
+                            root.prayerInfo = "API error: " + (json.status || "Unknown")
+                            ToastService.showError("Prayer Times", "API returned: " + (json.status || "Unknown"))
+                        }
+                    } catch (e) {
+                        root.prayerInfo = "Parse error"
+                        ToastService.showError("Prayer Times", "JSON parse error: " + e.message)
+                    }
+
+                } else if (xhr.status === 429) {
+                    // Rate limited — use exponential backoff: 30s, 60s, 120s, … capped at 10min
+                    root.retryCount++
+                    var backoff = Math.min(30000 * Math.pow(2, root.retryCount - 1), 600000)
+                    console.warn("Prayer Times: 429 rate-limited, retrying in " + (backoff / 1000) + "s")
+                    root.prayerInfo = "Rate limited, retrying…"
+                    retryTimer.interval = backoff
+                    root.fetching = true   // keep guard up so nothing else triggers a request
+                    retryTimer.restart()
+
+                } else {
+                    // Other HTTP errors (500, timeout, no network, etc.)
+                    root.prayerInfo = "Network error (" + xhr.status + ")"
+                    ToastService.showError("Prayer Times", "HTTP " + xhr.status)
+                }
+            }
+        }
+        xhr.open("GET", url)
+        xhr.send()
+    }
+
+    //  Helper functions
+
+    // Strips the timezone label that Aladhan appends to times.
+    // e.g. "04:39 (WIB)" → "04:39", so we can do clean HH:mm comparisons.
+    function stripTimezone(timeStr) {
+        return timeStr ? timeStr.split(" ")[0] : ""
+    }
+
+    // Converts "HH:mm" to total minutes since midnight (e.g. "04:39" → 279).
+    // Used to calculate how long ago a prayer started.
+    function timeToMinutes(hhmm) {
+        var parts = hhmm.split(":")
+        return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10)
+    }
+
+    //  Prayer data processing — the JS equivalent of the old bash logic
+    //  (get-prayer-times lines 59-121). Called on every refresh tick
+    //  against cached data, NOT on every API call.
+
+    function processPrayerData(data) {
+        var timings = data.timings
+        var dateInfo = data.date
+
+        // Extract and clean all prayer times (strip timezone labels)
+        var fajrTime    = stripTimezone(timings.Fajr)
+        var sunriseTime = stripTimezone(timings.Sunrise)
+        var dhuhrTime   = stripTimezone(timings.Dhuhr)
+        var asrTime     = stripTimezone(timings.Asr)
+        var maghribTime = stripTimezone(timings.Maghrib)
+        var ishaTime    = stripTimezone(timings.Isha)
+
+        // Update the display properties that the popout reads
+        root.fajr    = fajrTime
+        root.dhuhr   = dhuhrTime
+        root.asr     = asrTime
+        root.maghrib = maghribTime
+        root.isha    = ishaTime
+
+        // Format date strings for the popout header
+        root.dateGreg = dateInfo.readable || ""
+        if (dateInfo.hijri) {
+            root.dateHijr = dateInfo.hijri.day + " " + dateInfo.hijri.month.en + " " + dateInfo.hijri.year
+        }
+
+        // Determine which prayer period we're in and what's next:
+        // Compare current time (HH:mm string) against each prayer threshold.
+        // String comparison works because HH:mm is zero-padded and lexicographic order = chronological order.
+        var now = new Date()
+        var nowStr = Qt.formatTime(now, "HH:mm")
+        var nowMin = timeToMinutes(nowStr)
+
+        var currName, currTime, nextName, nextTime
+
+        if (nowStr < fajrTime) {
+            currName = "Isha";    currTime = ishaTime      // Before Fajr → still in last night's Isha
+            nextName = "Fajr";    nextTime = fajrTime
+        } else if (nowStr < sunriseTime) {
+            currName = "Fajr";    currTime = fajrTime
+            nextName = "Sunrise"; nextTime = sunriseTime
+        } else if (nowStr < dhuhrTime) {
+            currName = "Sunrise"; currTime = sunriseTime
+            nextName = "Dhuhr";   nextTime = dhuhrTime
+        } else if (nowStr < asrTime) {
+            currName = "Dhuhr";   currTime = dhuhrTime
+            nextName = "Asr";     nextTime = asrTime
+        } else if (nowStr < maghribTime) {
+            currName = "Asr";     currTime = asrTime
+            nextName = "Maghrib"; nextTime = maghribTime
+        } else if (nowStr < ishaTime) {
+            currName = "Maghrib"; currTime = maghribTime
+            nextName = "Isha";    nextTime = ishaTime
+        } else {
+            currName = "Isha";    currTime = ishaTime      // After Isha → next is tomorrow's Fajr
+            nextName = "Fajr";    nextTime = fajrTime
+        }
+
+        root.currName = currName  // Drives which icon is shown in the bar
+
+        // Build the bar pill text (compact format):
+        // If the current prayer started ≤30 minutes ago: "Maghrib 18:15 · Isha 19:26"
+        // Otherwise just the next prayer:                 "Isha 19:26"
+        var currMin = timeToMinutes(currTime)
+        var diff = nowMin - currMin             // minutes since current prayer started
+        if (diff < 0) diff += 1440              // handle day wraparound (Isha → Fajr)
+
+        var result = ""
+        if (diff <= 30) {
+            result = currName + " " + currTime + " · "
+
+            // Fire a toast notification if the prayer JUST started (within one refresh cycle).
+            // e.g. at 5min refresh: toast fires when diff is 0–5min, so you see it once.
+            if (diff * 60000 <= root.refreshInterval) {
+                ToastService.showInfo("Prayer time - " + currName + " " + currTime)
+            }
+        }
+        result += nextName + " " + nextTime
+
+        // "Coming up" notification:
+        // Notify when the next prayer is ≤15 minutes away.
+        // Only fires once per prayer: triggers when timeUntilNext first falls within
+        // one refresh interval of the 15-minute mark (i.e. between 15min and 15min−refresh).
+        var nextMin = timeToMinutes(nextTime)
+        var timeUntilNext = nextMin - nowMin        // minutes until next prayer
+        if (timeUntilNext < 0) timeUntilNext += 1440  // handle day wraparound
+        if (timeUntilNext <= 15 && timeUntilNext > 0) {
+            // Fire only once: when we first enter the ≤15min window (within one refresh cycle of 15min)
+            if ((15 - timeUntilNext) * 60000 < root.refreshInterval) {
+                ToastService.showInfo(nextName + " in " + timeUntilNext + " min")
+            }
+        }
+
+        root.prayerInfo = result
     }
 
     popoutContent: Component {
@@ -170,6 +362,4 @@ PluginComponent {
             }
         }
     }
-
-
 }
