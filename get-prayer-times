@@ -9,16 +9,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JSON_FILE="prayer_times_monthly.json"
 STORED_INDEX=null
 
+# notify-send "LAT: $LAT - LON: $LON" "REF: $refresh" -u critical
+if [[ -z "$LAT" || -z "$LON" ]]; then
+    echo '{"Fajr":"","Sunrise":"","Dhuhr":"","Asr":"","Sunset":"","Maghrib":"","Isha":"","Imsak":"","Midnight":"","Firstthird":"","Lastthird":"","prayerInfo":"Lat and Lon must be filled","DateHijr":"","DateGreg":"","currName":""}'
+    exit 0
+fi
+
 # Function to fetch data
 URL="https://api.aladhan.com/v1/calendar/from/${DATE}/to/${TO_DATE}?latitude=${LAT}&longitude=${LON}"
 JSON_PATH="$SCRIPT_DIR/$JSON_FILE"
 
 fetch_data() {
-    # notify-send "Requesting data" "$URL"
-    dms ipc toast infoWith 'Requesting data' "$URL" '' ''
+    notify-send "Requesting data" "$URL"
+    # dms ipc toast infoWith 'Requesting data' "$URL" '' ''
     curl -s "$URL" | jq '.' > "$JSON_PATH"
-    dms ipc toast infoWith 'Saved json' "from ${DATE} to ${TO_DATE}" '' ''
-    # notify-send "Saved json" "from ${DATE} to ${TO_DATE}"
+    # dms ipc toast infoWith 'Saved json' "from ${DATE} to ${TO_DATE}" '' ''
+    notify-send "Saved json" "from ${DATE} to ${TO_DATE}"
 }
 
 get_stored_index() {
@@ -99,7 +105,8 @@ if (( SELISIH <= 30 )); then
     ALERT="$CURR_NAME ${CURR_TIME:0:5}"
     RESULT="Current: $ALERT - "
     if (( SELISIH - 1 <= refresh / 60000 )); then 
-        dms ipc toast info "Prayer time - $ALERT"
+        # dms ipc toast info "Prayer time - $ALERT"
+        notify-send "Prayer time" "$ALERT" -u critical
     fi
 fi
 

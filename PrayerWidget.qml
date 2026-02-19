@@ -21,14 +21,14 @@ PluginComponent {
     property string currName: "Fajr" // Current prayer name: Fajr, Dhuhr, Asr, Maghrib, Isha
     property bool pluginDataLoaded: false
     property int refreshInterval: 5 * 60000 // default in minutes
-    property string lat: "-6.2088" // default Jakarta
-    property string lon: "106.8456" // default Jakarta
+    property string lat: "" // default Jakarta
+    property string lon: "" // default Jakarta
     property string scriptPath: Qt.resolvedUrl("get-prayer-times").toString().replace("file://", "")
 
     onPluginDataChanged: {
         root.refreshInterval = (Number(root.pluginData.refreshInterval) || 5) * 60000
-        root.lat = root.pluginData.lat || "-6.2088"
-        root.lon = root.pluginData.lon || "106.8456"
+        root.lat = root.pluginData.lat
+        root.lon = root.pluginData.lon
         root.pluginDataLoaded = true
         // Run process immediately when pluginData is loaded
         prayerProcess.running = true;
