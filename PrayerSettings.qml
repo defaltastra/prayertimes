@@ -55,7 +55,6 @@ PluginSettings {
         defaultValue: "0.0"
     }
 
-<<<<<<< HEAD
     SelectionSetting {
         settingKey: "method"
         label: "Calculation Method"
@@ -99,8 +98,7 @@ PluginSettings {
             { label: "Hanafi", value: "1" }
         ]
     }
-}
-=======
+
     ToggleSetting {
         settingKey: "use12HourFormat"
         label: "12-Hour Format"
@@ -108,4 +106,3 @@ PluginSettings {
         defaultValue: false
     }
 }
->>>>>>> upstream/main

@@ -30,6 +30,7 @@ PluginComponent {
     // Persistent state:
     // root.pluginState is used to store the monthly calendar data across sessions.
     // This allows the plugin to work offline if data for the current month has been fetched once.
+    property var pluginState: pluginService.loadPluginState("prayerTimes", "")
     property var calendarData: root.pluginState ? (root.pluginState.calendar || null) : null
     property int cachedMonth: root.pluginState ? (root.pluginState.month || 0) : 0
     property int cachedYear: root.pluginState ? (root.pluginState.year || 0) : 0
@@ -148,7 +149,6 @@ PluginComponent {
         if (root.method !== "") {
             url += "&method=" + root.method
         }
-
         var xhr = new XMLHttpRequest()
         xhr.onreadystatechange = function() {
             if (xhr.readyState === XMLHttpRequest.DONE) {
@@ -167,7 +167,9 @@ PluginComponent {
                                 method: root.method,
                                 school: root.school
                             }
-                            root.pluginState = newState
+                            
+                            pluginService.savePluginState("prayerTimes", "", newState)
+                            // root.pluginState = newState
                             
                             // Re-update internal properties from the new state
                             root.calendarData = json.data
